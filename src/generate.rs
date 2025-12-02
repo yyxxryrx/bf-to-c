@@ -2,7 +2,7 @@ use crate::bf_ir::{BfIR, IRValue};
 
 const C_FILE_HEAD: &'static str = "#include <stdio.h>\n#include <stdint.h>\n\nint ptr = 15000;\nuint8_t buffer[30000];\n\nint main() {\n";
 const PY_FILE_HEAD: &'static str = "import sys\n\nbuffer = [0] * 30000\nptr = 15000\n";
-const LLVM_FILE_HEAD: &'static str = "declare i32 @putchar(i32)\ndeclare i32 @getchar()\n\n@buffer = global [30000 x i8] zeroinitializer\n\ndefine i32 @main() {\n    %ptr = alloca i64\n    store i64 15000, %ptr\n";
+const LLVM_FILE_HEAD: &'static str = "declare i32 @putchar(i32)\ndeclare i32 @getchar()\n\n@buffer = global [30000 x i8] zeroinitializer\n\ndefine i32 @main() {\n    %ptr = alloca i64\n    store i64 15000, ptr %ptr\n";
 
 pub fn generate_c_code(irs: &Vec<BfIR>) -> String {
     fn _g(irs: &Vec<BfIR>, depth: usize) -> String {
@@ -199,12 +199,14 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                             new_ir! {
                                 // 指定索引(var_index) 和 每行IR的虚拟寄存器名称(_cur)
                                 @var_index, _cur
+                                // 读取指针的值
+                                code += "{_cur} = load i64, ptr %ptr",
                                 // 计算指针偏移
-                                code += "{_cur} = {cmd} i64 {val}, %ptr",
+                                code += #ptr "{_cur} = {cmd} i64 {val}, {ptr}",
                                 // 获取指向的元素的指针，并将其虚拟寄存器保存为当前的局部变量(e_ptr)，以供后续使用
                                 // #last 是获取上一句的虚拟寄存器名称并保存到 last 这个变量名里，语法：#<var_name>
                                 // => e_ptr 是保存这一行的虚拟寄存器名称到局部变量，以供后续使用，语法：=> <var_name>
-                                code += #last "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {last}" => e_ptr,
+                                code += #real_ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {real_ptr}" => e_ptr,
                                 // 获取指针指向的数值
                                 code += "{_cur} = load i8, ptr {e_ptr}",
                                 // 计算更新后的值
@@ -217,7 +219,8 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                             new_ir! {
                                 @var_index, _cur
                                 // 没有偏移，直接拿就行
-                                code += "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 %ptr" => e_ptr,
+                                code += "{_cur} = load i64, ptr %ptr",
+                                code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}" => e_ptr,
                                 code += "{_cur} = load i8, ptr {e_ptr}",
                                 code += #last "{_cur} = add i8 {value}, {last}",
                                 code += void! #last "store i8 {last}, ptr {e_ptr}"
@@ -235,5 +238,5 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
         }
         code
     }
-    String::from(LLVM_FILE_HEAD) + &_g(irs, 0) + "}\n"
+    String::from(LLVM_FILE_HEAD) + &_g(irs, 0) + "    ret i32 0\n}\n"
 }
