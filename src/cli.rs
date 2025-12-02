@@ -8,7 +8,7 @@ use std::path::PathBuf;
 pub struct Cli {
     #[clap(help = "your bf code file")]
     pub input: PathBuf,
-    #[clap(short, long, help = "The out C file path")]
+    #[clap(short, long, help = "The out file path")]
     pub output: Option<PathBuf>,
     #[clap(
         short,
@@ -17,7 +17,7 @@ pub struct Cli {
         default_value = "0"
     )]
     pub cv: usize,
-    #[clap(short = 'O', help = "Optimize level", default_value = "1")]
+    #[clap(short = 'O', help = "Optimization level", default_value = "1")]
     pub opt: usize,
     #[clap(short = 'L', long, help = "The target language", default_value = "c")]
     pub language: Language,
