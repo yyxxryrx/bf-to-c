@@ -206,7 +206,29 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
     /// ```
     macro_rules! new_ir {
         // Generate LLVM IR instruction without return value (such as store)
-        {var: $var:ident, code: $code:ident, cur: $cur:ident, void! $(,last: $last:ident)?, smt: $smt:literal $(,global: $global:ident)?} => {
+        {*var: $var:ident, code: $code:ident $(, cur: $cur:ident)?, void! $(,last: $last:ident)?, smt: $smt:literal $(,global: $global:ident)?} => {
+            $code += "    ";
+            $code += &{
+                $(let $last = format!("%bf{}", $var);)?
+                format!($smt)
+            };
+            $code += "\n";
+            $(let $global = format!("%bf{}", $var);)?
+        };
+        // Generate LLVM IR instruction with return value (such as load, add, etc.)
+        {*var: $var:ident, code: $code:ident, cur: $cur:ident $(,last: $last:ident)?, smt: $smt:literal $(,global: $global:ident)?} => {
+            $code += "    ";
+            $code += &{
+                $(let $last = format!("%bf{}", $var);)?
+                *$var += 1;
+                let $cur = format!("%bf{}", $var);
+                format!($smt)
+            };
+            $code += "\n";
+            $(let $global = format!("%bf{}", $var);)?
+        };
+        // Generate LLVM IR instruction without return value (such as store)
+        {var: $var:ident, code: $code:ident $(, cur: $cur:ident)?, void! $(,last: $last:ident)?, smt: $smt:literal $(,global: $global:ident)?} => {
             $code += "    ";
             $code += &{
                 $(let $last = format!("%bf{}", $var);)?
@@ -226,6 +248,22 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
             };
             $code += "\n";
             $(let $global = format!("%bf{}", $var);)?
+        };
+        // Generate LLVM IR instructions in batch
+        {@*$val_index:ident, void! $( $code:ident += $(#$last:ident)? $smt:literal $( => $global:ident)?),*$(,)?} => {
+            $(
+                new_ir!(*var: $val_index, code: $code ,void! $(, last: $last)?, smt: $smt $(, global: $global)?);
+            )*
+        };
+        {@*$val_index:ident, $cur:ident $( $code:ident += $(void$void:tt)? $(#$last:ident)? $smt:literal $( => $global:ident)?),*$(,)?} => {
+            $(
+                new_ir!(*var: $val_index, code: $code, cur: $cur $(, void$void)? $(, last: $last)?, smt: $smt $(, global: $global)?);
+            )*
+        };
+        {@$val_index:ident, void! $( $code:ident += $(#$last:ident)? $smt:literal $( => $global:ident)?),*$(,)?} => {
+            $(
+                new_ir!(var: $val_index, code: $code ,void! $(, last: $last)?, smt: $smt $(, global: $global)?);
+            )*
         };
         // Generate LLVM IR instructions in batch
         {@$val_index:ident, $cur:ident $( $code:ident += $(void$void:tt)? $(#$last:ident)? $smt:literal $( => $global:ident)?),*$(,)?} => {
@@ -273,7 +311,7 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
         e_ptr
     }
 
-    fn _g(irs: &Vec<BfIR>, mut var_index: usize) -> String {
+    fn _g(irs: &Vec<BfIR>, var_index: &mut usize, loop_index: &mut usize) -> String {
         let mut code = String::new();
         for ir in irs {
             match ir {
@@ -281,10 +319,10 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                     IRValue::Const(value) => {
                         // 先将其转换
                         let value = *value as u8;
-                        get_ptr(offset, &mut var_index, &mut code);
+                        get_ptr(offset, var_index, &mut code);
                         new_ir! {
                             // 指定索引(var_index) 和 每行IR的虚拟寄存器名称(_cur)
-                            @var_index, _cur
+                            @*var_index, _cur
                             // 获取指向的元素的指针，并将其虚拟寄存器保存为当前的局部变量(e_ptr)，以供后续使用
                             // #<var_name> 是获取上一句的虚拟寄存器名称并保存到 var_name 这个变量名里，语法：#<var_name>
                             // 这里上面运行了 `get_ptr` 所以上一句的虚拟寄存器存放的就是指针的值
@@ -301,13 +339,13 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                     }
                     IRValue::Expr(expr) => {
                         // 获取表达式依赖的元素的指针值
-                        get_ptr(&expr.source, &mut var_index, &mut code);
+                        get_ptr(&expr.source, var_index, &mut code);
                         match (expr.op, expr.value) {
                             // 有计算的部分
                             (Some(op), Some(val)) => {
                                 let cmd = op.to_ir();
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到表达式依赖的值的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}",
                                     // 取出表达式依赖的值
@@ -316,9 +354,9 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                                     code += #last "{_cur} = {cmd} i8 {val}, {last}" => val,
                                 }
                                 // 获取目标项元素的指针值
-                                get_ptr(offset, &mut var_index, &mut code);
+                                get_ptr(offset, var_index, &mut code);
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到目标元素的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}" => e_ptr,
                                     // 拿到目标元素的当前值
@@ -332,16 +370,16 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                             // 没有计算的部分
                             (None, None) => {
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到表达式依赖的值的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}",
                                     // 取出表达式依赖的值，这里不需要计算，直接保存就行
                                     code += #e_ptr "{_cur} = load i8, ptr {e_ptr}" => val,
                                 }
                                 // 获取目标项元素的指针值
-                                get_ptr(offset, &mut var_index, &mut code);
+                                get_ptr(offset, var_index, &mut code);
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到目标元素的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}" => e_ptr,
                                     // 拿到目标元素的当前值
@@ -360,10 +398,10 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                     IRValue::Const(value) => {
                         // 先将其转换
                         let value = *value as u8;
-                        get_ptr(offset, &mut var_index, &mut code);
+                        get_ptr(offset, var_index, &mut code);
                         new_ir! {
                             // 指定索引(var_index) 和 每行IR的虚拟寄存器名称(_cur)
-                            @var_index, _cur
+                            @*var_index, _cur
                             // 获取指向的元素的指针，并将其虚拟寄存器保存为当前的局部变量(e_ptr)，以供后续使用
                             // #<var_name> 是获取上一句的虚拟寄存器名称并保存到 var_name 这个变量名里，语法：#<var_name>
                             // 这里上面运行了 `get_ptr` 所以上一句的虚拟寄存器存放的就是指针的值
@@ -380,13 +418,13 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                     }
                     IRValue::Expr(expr) => {
                         // 获取表达式依赖的元素的指针值
-                        get_ptr(&expr.source, &mut var_index, &mut code);
+                        get_ptr(&expr.source, var_index, &mut code);
                         match (expr.op, expr.value) {
                             // 有计算的部分
                             (Some(op), Some(val)) => {
                                 let cmd = op.to_ir();
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到表达式依赖的值的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}",
                                     // 取出表达式依赖的值
@@ -395,9 +433,9 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                                     code += #last "{_cur} = {cmd} i8 {val}, {last}" => val,
                                 }
                                 // 获取目标项元素的指针值
-                                get_ptr(offset, &mut var_index, &mut code);
+                                get_ptr(offset, var_index, &mut code);
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到目标元素的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}" => e_ptr,
                                     // 拿到目标元素的当前值
@@ -411,16 +449,16 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                             // 没有计算的部分
                             (None, None) => {
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到表达式依赖的值的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}",
                                     // 取出表达式依赖的值，这里不需要计算，直接保存就行
                                     code += #e_ptr "{_cur} = load i8, ptr {e_ptr}" => val,
                                 }
                                 // 获取目标项元素的指针值
-                                get_ptr(offset, &mut var_index, &mut code);
+                                get_ptr(offset, var_index, &mut code);
                                 new_ir! {
-                                    @var_index, _cur
+                                    @*var_index, _cur
                                     // 拿到目标元素的指针
                                     code += #ptr "{_cur} = getelementptr [30000 x i8], ptr @buffer, i64 0, i64 {ptr}" => e_ptr,
                                     // 拿到目标元素的当前值
@@ -437,7 +475,7 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                 },
                 BfIR::SetValue(offset, value) => {
                     let value = *value as u8;
-                    get_element_ptr(offset, &mut var_index, &mut code);
+                    get_element_ptr(offset, var_index, &mut code);
                     new_ir! {
                         @var_index, _cur
                         code += void! #e_ptr "store i8 {value}, ptr {e_ptr}"
@@ -445,7 +483,7 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                 }
                 BfIR::IncrementPointer(val) => {
                     new_ir! {
-                        @var_index, _cur
+                        @*var_index, _cur
                         code += "{_cur} = load i64, ptr %ptr",
                         code += #ptr_value "{_cur} = add i64 {ptr_value}, {val}",
                         code += void! #new_value "store i64 {new_value}, ptr %ptr",
@@ -453,36 +491,93 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                 }
                 BfIR::DecrementPointer(val) => {
                     new_ir! {
-                        @var_index, _cur
+                        @*var_index, _cur
                         code += "{_cur} = load i64, ptr %ptr",
                         code += #ptr_value "{_cur} = sub i64 {ptr_value}, {val}",
                         code += void! #new_value "store i64 {new_value}, ptr %ptr",
                     }
                 }
                 BfIR::Output(offset) => {
-                    get_element_ptr(offset, &mut var_index, &mut code);
+                    get_element_ptr(offset, var_index, &mut code);
                     new_ir! {
-                        @var_index, _cur
+                        @*var_index, _cur
                         code += #e_ptr "{_cur} = load i8, ptr {e_ptr}",
                         code += #val "{_cur} = zext i8 {val} to i32",
                         code += void! #chr "call i32 @putchar(i32 {chr})"
                     }
                 }
                 BfIR::Input(offset) => {
-                    let e_ptr = get_element_ptr(offset, &mut var_index, &mut code);
+                    let e_ptr = get_element_ptr(offset, var_index, &mut code);
                     new_ir! {
-                        @var_index, _cur
+                        @*var_index, _cur
                         code += "{_cur} = call @getchar()",
                         code += #val "{_cur} = trunc i32 {val} to i8",
                         code += void! #val "store i8 {val}, ptr {e_ptr}"
                     }
                 }
-                _ => {
-                    todo!("未实现的转换: {ir:?}")
+                BfIR::DeadLoop(body) => {
+                    *loop_index += 1;
+                    let cur_loop_index = *loop_index;
+                    code += &format!("start{cur_loop_index}:\n");
+                    code += &_g(body, var_index, loop_index);
+                    new_ir! {
+                        @*var_index, void!
+                        code += "br label %start{cur_loop_index}"
+                    }
+                }
+                BfIR::WhileLoop(body) => {
+                    *loop_index += 1;
+                    let cur_loop_index = *loop_index;
+                    get_element_ptr(&PtrOffset::None, var_index, &mut code);
+                    new_ir! {
+                        @*var_index, _cur
+                        code += #ptr "{_cur} = load i8, ptr {ptr}",
+                        code += #val "{_cur} = icmp eq i8 {val}, 0",
+                        code += void! #ret "br i1 {ret}, label %end{cur_loop_index}, label %start{cur_loop_index}"
+                    }
+                    code += &format!("start{cur_loop_index}:\n");
+                    code += &_g(body, var_index, loop_index);
+                    get_element_ptr(&PtrOffset::None, var_index, &mut code);
+                    new_ir! {
+                        @*var_index, _cur
+                        code += #ptr "{_cur} = load i8, ptr {ptr}",
+                        code += #val "{_cur} = icmp eq i8 {val}, 0",
+                        code += void! #ret "br i1 {ret}, label %end{cur_loop_index}, label %start{cur_loop_index}"
+                    }
+                    code += &format!("end{cur_loop_index}:\n");
+                }
+                BfIR::ForLoop(body, val) => {
+                    *loop_index += 1;
+                    let cur_loop_index = *loop_index;
+                    get_element_ptr(&PtrOffset::None, var_index, &mut code);
+                    new_ir! {
+                        @*var_index, _cur
+                        code += #ptr "{_cur} = load i8, ptr {ptr}",
+                        code += #val "{_cur} = icmp eq i8 {val}, 0",
+                        code += void! #ret "br i1 {ret}, label %end{cur_loop_index}, label %start{cur_loop_index}"
+                    }
+                    code += &format!("start{cur_loop_index}:\n");
+                    code += &_g(body, var_index, loop_index);
+                    let cmd = if *val >= 0 {
+                        "add"
+                    } else {
+                        "sub"
+                    };
+                    let val = (*val).abs();
+                    let e_ptr = get_element_ptr(&PtrOffset::None, var_index, &mut code);
+                    new_ir! {
+                        @*var_index, _cur
+                        code += "{_cur} = load i8, ptr {e_ptr}",
+                        code += #v "{_cur} = {cmd} i8 {v}, {val}" => val,
+                        code += void! "store i8 {val}, ptr {e_ptr}",
+                        code += "{_cur} = icmp eq i8 {val}, 0",
+                        code += void! #ret "br i1 {ret}, label %end{cur_loop_index}, label %start{cur_loop_index}"
+                    }
+                    code += &format!("end{cur_loop_index}:\n");
                 }
             }
         }
         code
     }
-    String::from(LLVM_FILE_HEAD) + &_g(irs, 0) + "    ret i32 0\n}\n"
+    String::from(LLVM_FILE_HEAD) + &_g(irs, &mut 0, &mut 0) + "    ret i32 0\n}\n"
 }
