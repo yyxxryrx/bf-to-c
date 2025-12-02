@@ -63,6 +63,16 @@ impl std::fmt::Display for PtrOffset {
     }
 }
 
+impl PtrOffset {
+    pub fn to_ir<'a>(&self) -> Option<(&'a str, isize)> {
+        match self {
+            Self::Left(val) => Some(("sub", *val)),
+            Self::Right(val) => Some(("add", *val)),
+            Self::None => None,
+        }
+    }
+}
+
 #[allow(unused)]
 #[derive(Debug, Copy, Clone)]
 pub enum IROp {

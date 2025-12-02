@@ -6,8 +6,7 @@ mod lexer;
 
 use crate::ast::{optimal_ast, parse_ast};
 use crate::bf_ir::{generate_ir, optimize_ir};
-use crate::cli::Cli;
-use crate::generate::generate_code;
+use crate::cli::{Cli, Language};
 use crate::lexer::{Token, lexer_all};
 use std::error::Error;
 use std::io::{Read, Write};
@@ -41,6 +40,7 @@ fn run<T>(
     fs: &mut T,
     tokens: Vec<(Token, usize)>,
     opt: usize,
+    language: Language,
 ) -> Result<(), Box<dyn Error>>
 where
     T: Write,
@@ -148,7 +148,7 @@ where
             if opt > 1 {
                 optimize_ir(&mut ir);
             }
-            let code = generate_code(&ir);
+            let code = language.generate_code(&ir);
             fs.write_all(code.as_bytes())?;
         }
         _ => {}
@@ -178,7 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         == "-"
     {
         let mut fs = std::io::stdout();
-        run(cli.cv, &mut fs, tokens, cli.opt)?;
+        run(cli.cv, &mut fs, tokens, cli.opt, cli.language)?;
     } else {
         let mut fs = std::fs::File::create(
             cli.output.unwrap_or(
@@ -189,7 +189,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .into(),
             ),
         )?;
-        run(cli.cv, &mut fs, tokens, cli.opt)?;
+        run(cli.cv, &mut fs, tokens, cli.opt, cli.language)?;
     }
     Ok(())
 }
