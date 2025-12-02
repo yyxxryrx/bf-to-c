@@ -93,6 +93,17 @@ impl std::fmt::Display for IROp {
     }
 }
 
+impl IROp {
+    pub fn to_ir(&self) -> &str {
+        match self {
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Mul => "mul",
+            Self::Div => "udiv",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct IRExpr {
     pub source: PtrOffset,
