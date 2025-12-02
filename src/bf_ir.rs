@@ -71,6 +71,14 @@ impl PtrOffset {
             Self::None => None,
         }
     }
+
+    pub fn apply_offset(&self, ptr: isize) -> isize {
+        match self {
+            Self::None => ptr,
+            Self::Left(val) => ptr - *val,
+            Self::Right(val) => ptr + *val,
+        }
+    }
 }
 
 #[allow(unused)]
@@ -185,11 +193,11 @@ impl ValueChange<&mut IRExpr> for BfIR {
 
 impl BfIR {
     fn is_for_loop(&self) -> bool {
-        matches!(self, BfIR::ForLoop(_, _))
+        matches!(self, BfIR::ForLoop(..))
     }
 
     fn is_loop(&self) -> bool {
-        matches!(self, BfIR::WhileLoop(_) | BfIR::ForLoop(_, _))
+        matches!(self, BfIR::WhileLoop(..) | BfIR::ForLoop(..))
     }
 
     #[allow(unused)]
@@ -253,7 +261,7 @@ fn ast_loop_to_ir(ast_loop: &ast::BfAst) -> BfIR {
                     ir.push((ir_add, ptr));
                 }
             }
-            ast::BfAst::Loop(_) => {
+            ast::BfAst::Loop(..) => {
                 let loop_ir = ast_loop_to_ir(child_ast);
                 all_for = all_for && (loop_ir.is_for_loop() || !loop_ir.is_loop());
                 ir.push((loop_ir, 1));
@@ -278,9 +286,9 @@ pub fn generate_ir(ast_tree: &Vec<ast::BfAst>) -> Vec<BfIR> {
     let mut ir = vec![];
     for ast_child in ast_tree {
         let child_ir = match ast_child {
-            ast::BfAst::Move(_) => ast_move_to_ir(ast_child),
-            ast::BfAst::Add(_) => ast_add_to_ir(ast_child),
-            ast::BfAst::Loop(_) => Some(ast_loop_to_ir(ast_child)),
+            ast::BfAst::Move(..) => ast_move_to_ir(ast_child),
+            ast::BfAst::Add(..) => ast_add_to_ir(ast_child),
+            ast::BfAst::Loop(..) => Some(ast_loop_to_ir(ast_child)),
             ast::BfAst::Output => Some(BfIR::Output(PtrOffset::None)),
             ast::BfAst::Input => Some(BfIR::Input(PtrOffset::None)),
         };
@@ -460,9 +468,14 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                     let ptr_offset: isize = ptr_offset.into();
                     local_var.insert(ptr + ptr_offset, *value as u8);
                 }
-                BfIR::WhileLoop(children) => {
+                BfIR::WhileLoop(..) => {
+                    if let Some(&init_value) = local_var.get(&ptr) {
+                        if init_value == 0 {
+                            ir.remove(index);
+                            continue;
+                        }
+                    }
                     has_while = true;
-                    optimize_ir(children);
                     ptr = 0;
                     local_var.clear();
                     local_var.insert(ptr, 0);
