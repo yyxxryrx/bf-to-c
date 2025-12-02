@@ -468,6 +468,15 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                         code += void! #chr "call i32 @putchar(i32 {chr})"
                     }
                 }
+                BfIR::Input(offset) => {
+                    let e_ptr = get_element_ptr(offset, &mut var_index, &mut code);
+                    new_ir! {
+                        @var_index, _cur
+                        code += "{_cur} = call @getchar()",
+                        code += #val "{_cur} = trunc i32 {val} to i8",
+                        code += void! #val "store i8 {val}, ptr {e_ptr}"
+                    }
+                }
                 _ => {
                     todo!("未实现的转换: {ir:?}")
                 }

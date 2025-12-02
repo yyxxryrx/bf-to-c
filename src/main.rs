@@ -9,6 +9,7 @@ use crate::bf_ir::{generate_ir, optimize_ir};
 use crate::cli::{Cli, Language};
 use crate::lexer::{Token, lexer_all};
 use std::error::Error;
+use std::fmt::Formatter;
 use std::io::{Read, Write};
 
 const FILE_HEAD: &'static str = "#include <stdio.h>\n#include <stdint.h>\n\nint cur = 15000;\nuint8_t buffer[30000];\n\nint main() {\n";
@@ -35,6 +36,18 @@ fn get(count: usize, sub: bool, name: Option<&str>) -> String {
     }
 }
 
+#[derive(Debug)]
+struct NotSupportLanguage(String);
+
+impl std::fmt::Display for NotSupportLanguage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Not support language: {}", self.0)
+    }
+}
+
+impl Error for NotSupportLanguage {
+}
+
 fn run<T>(
     mode: usize,
     fs: &mut T,
@@ -47,6 +60,9 @@ where
 {
     match mode {
         0 => {
+            if !matches!(language, Language::C) {
+                return Err(Box::new(NotSupportLanguage("The compiler version is too low".to_string())))
+            }
             fs.write_all(FILE_HEAD.as_bytes())?;
             let mut value_change = 0isize;
             let mut index_change = 0isize;
