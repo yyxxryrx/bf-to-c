@@ -299,6 +299,7 @@ pub fn generate_ir(ast_tree: &Vec<ast::BfAst>) -> Vec<BfIR> {
     ir
 }
 
+#[derive(Debug, Clone)]
 struct OptimizeIRContext {
     has_while: bool,
     local_var: HashMap<isize, u8>,
@@ -332,7 +333,12 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                         index += 1;
                         continue;
                     }
-                    optimize_ir(children);
+                    let mut new_ctx = OptimizeIRContext {
+                        local_var: local_var.clone(),
+                        has_while: ctx.has_while
+                    };
+                    _opt(children, &mut new_ctx);
+                    *local_var = new_ctx.local_var;
                     if *value_changed == 0 {
                         *child = BfIR::DeadLoop(children.clone());
                         index += 1;
