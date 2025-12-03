@@ -143,7 +143,11 @@ pub fn generate_py_code(irs: &Vec<BfIR>) -> String {
                 }
                 BfIR::WhileLoop(body) => {
                     code += &format!("{indent}while buffer[ptr] != 0:\n");
-                    code += &_g(body, depth + 1);
+                    if body.is_empty() {
+                        code += &format!("{indent}    pass\n");
+                    } else {
+                        code += &_g(body, depth + 1);
+                    }
                 }
                 BfIR::Output(offset) => {
                     code +=
