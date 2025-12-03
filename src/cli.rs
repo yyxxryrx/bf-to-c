@@ -52,4 +52,12 @@ impl Language {
             Self::LLVM => generate_llvm_ir(irs),
         }
     }
+
+    pub fn get_ext(&self) -> &'static str {
+        match self {
+            Self::C => "c",
+            Self::Python => "py",
+            Self::LLVM => "ll",
+        }
+    }
 }

@@ -199,8 +199,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut fs = std::fs::File::create(
             cli.output.unwrap_or(
                 format!(
-                    "{}.c",
-                    cli.input.file_stem().unwrap_or("out".as_ref()).display()
+                    "{}.{}",
+                    cli.input.file_stem().unwrap_or("out".as_ref()).display(),
+                    cli.language.get_ext()
                 )
                 .into(),
             ),
