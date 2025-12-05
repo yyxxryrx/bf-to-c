@@ -5,7 +5,7 @@ mod generate;
 mod lexer;
 
 use crate::ast::{optimal_ast, parse_ast};
-use crate::bf_ir::{generate_ir, optimize_ir};
+use crate::bf_ir::{generate_ir, optimize_ir, optimize_ir_oad};
 use crate::cli::{Cli, Language};
 use crate::lexer::{Token, lexer_all};
 use std::error::Error;
@@ -163,6 +163,9 @@ where
             let mut ir = generate_ir(&ast);
             if opt > 1 {
                 optimize_ir(&mut ir);
+            }
+            if opt > 2{
+                optimize_ir_oad(&mut ir);
             }
             let code = language.generate_code(&ir);
             fs.write_all(code.as_bytes())?;

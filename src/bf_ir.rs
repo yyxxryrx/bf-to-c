@@ -1,4 +1,6 @@
 use crate::ast;
+use crate::bf_ir::error::{OperationMergeError, OperationMergeResult};
+use nohash::BuildNoHashHasher;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 
@@ -82,7 +84,7 @@ impl PtrOffset {
 }
 
 #[allow(unused)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum IROp {
     Add,
     Sub,
@@ -108,6 +110,21 @@ impl IROp {
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "udiv",
+        }
+    }
+
+    pub fn op<T, U>(&self, a: T, b: T) -> U
+    where
+        T: std::ops::Add<Output = U>
+            + std::ops::Sub<Output = U>
+            + std::ops::Div<Output = U>
+            + std::ops::Mul<Output = U>,
+    {
+        match self {
+            Self::Add => a + b,
+            Self::Sub => a - b,
+            Self::Mul => a * b,
+            Self::Div => a / b,
         }
     }
 }
@@ -143,14 +160,65 @@ impl From<IRExpr> for IRValue {
     }
 }
 
+impl IRValue {
+    pub fn merge(&self, other_value: &Self, op: IROp) -> OperationMergeResult<Self> {
+        match (self, other_value) {
+            (Self::Const(val1), Self::Const(val2)) => Ok(Self::Const(op.op(*val1, *val2))),
+            (Self::Expr(expr), Self::Const(val)) | (Self::Const(val), Self::Expr(expr)) => {
+                match (expr.source, expr.op, expr.value) {
+                    (src, None, None) => Ok(Self::Expr(IRExpr {
+                        source: src,
+                        op: Some(op),
+                        value: Some(*val),
+                    })),
+                    (src, Some(op2), Some(val2)) => {
+                        if op2 == op {
+                            Ok(Self::Expr(IRExpr {
+                                source: src,
+                                op: Some(op),
+                                value: Some(*val + val2),
+                            }))
+                        } else {
+                            Err(OperationMergeError::CannotMatchExpr)
+                        }
+                    }
+                    _ => Err(OperationMergeError::CannotMatchExpr),
+                }
+            }
+            _ => Err(OperationMergeError::CannotMatchExpr),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IRValues(isize, Vec<(IROp, IRValue)>);
+
+impl IRValues {
+    pub fn new() -> Self {
+        Self { 0: 0, 1: vec![] }
+    }
+
+    pub fn push(&mut self, value: IRValue, op: IROp) {
+        let IRValue::Const(val) = value else {
+            self.1.push((op, value));
+            return;
+        };
+        self.0 = op.op(self.0, val);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum BfIR {
     IncrementPointer(isize),
     DecrementPointer(isize),
     IncrementValue(PtrOffset, IRValue),
+    IncrementValues(PtrOffset, IRValues),
     DecrementValue(PtrOffset, IRValue),
+    DecrementValues(PtrOffset, IRValues),
     /// SetValue(ptr_offset, value)
     SetValue(PtrOffset, isize),
+    SetExpr(PtrOffset, IRValue),
+    SetExprs(PtrOffset, IRValues),
     Output(PtrOffset),
     Input(PtrOffset),
     DeadLoop(Vec<BfIR>),
@@ -192,11 +260,11 @@ impl ValueChange<&mut IRExpr> for BfIR {
 }
 
 impl BfIR {
-    fn is_for_loop(&self) -> bool {
+    pub fn is_for_loop(&self) -> bool {
         matches!(self, BfIR::ForLoop(..))
     }
 
-    fn is_loop(&self) -> bool {
+    pub fn is_loop(&self) -> bool {
         matches!(self, BfIR::WhileLoop(..) | BfIR::ForLoop(..))
     }
 
@@ -210,6 +278,89 @@ impl BfIR {
             Self::Output(_) => Self::Output(ptr_offset),
             _ => self.clone(),
         }
+    }
+
+    pub fn merge_value(&self, other_ir: &Self) -> OperationMergeResult<Self> {
+        match (self, other_ir) {
+            (Self::IncrementValue(_, val1), Self::IncrementValue(offset, val2)) => {
+                match val1.merge(val2, IROp::Add) {
+                    Ok(val) => Ok(Self::IncrementValue(*offset, val)),
+                    Err(..) => {
+                        let mut values = IRValues::new();
+                        values.push(*val1, IROp::Add);
+                        values.push(*val2, IROp::Add);
+                        Ok(BfIR::IncrementValues(*offset, values))
+                    }
+                }
+            }
+            (Self::DecrementValue(_, val1), Self::DecrementValue(offset,val2)) => {
+                let mut values = IRValues::new();
+                values.push(*val1, IROp::Sub);
+                values.push(*val2, IROp::Sub);
+                Ok(BfIR::IncrementValues(*offset, values))
+            }
+            _ => Err(OperationMergeError::CannotMerge {
+                one: format!("{self:?}"),
+                other_one: format!("{other_ir:?}"),
+            }),
+        }
+    }
+
+    pub fn merge_op(&self, other_ir: &Self) -> OperationMergeResult<Self> {
+        Ok(match (self, other_ir) {
+            (.., Self::SetValue(..)) | (.., Self::SetExpr(..)) | (.., Self::SetExprs(..)) => {
+                other_ir.clone()
+            }
+            (Self::SetValue(_, value), Self::IncrementValue(offset, val)) => match val {
+                IRValue::Const(val) => Self::SetValue(*offset, *val + *value),
+                IRValue::Expr(expr) => match (expr.source, expr.op, expr.value) {
+                    (.., Some(..), Some(..)) => Self::SetExprs(
+                        *offset,
+                        IRValues {
+                            0: *value,
+                            1: vec![(IROp::Add, *val)],
+                        },
+                    ),
+                    (src, None, None) => Self::SetExpr(
+                        *offset,
+                        IRValue::Expr(IRExpr {
+                            source: src,
+                            op: Some(IROp::Add),
+                            value: Some(*value),
+                        }),
+                    ),
+                    _ => return Err(OperationMergeError::CannotMatchExpr),
+                },
+            },
+            (Self::SetValue(_, value), Self::DecrementValue(offset, val)) => match val {
+                IRValue::Const(val) => Self::SetValue(*offset, *value - *val),
+                IRValue::Expr(expr) => match (expr.source, expr.op, expr.value) {
+                    (.., Some(..), Some(..)) => Self::SetExprs(
+                        *offset,
+                        IRValues {
+                            0: *value,
+                            1: vec![(IROp::Sub, *val)],
+                        },
+                    ),
+                    (src, None, None) => Self::SetExpr(
+                        *offset,
+                        IRValue::Expr(IRExpr {
+                            source: src,
+                            op: Some(IROp::Sub),
+                            value: Some(*value),
+                        }),
+                    ),
+                    _ => return Err(OperationMergeError::CannotMatchExpr),
+                },
+            },
+            (Self::IncrementValue(..), Self::IncrementValue(..)) => self.merge_value(other_ir)?,
+            _ => {
+                return Err(OperationMergeError::CannotMerge {
+                    one: format!("{self:?}"),
+                    other_one: format!("{other_ir:?}"),
+                });
+            }
+        })
     }
 }
 
@@ -302,7 +453,7 @@ pub fn generate_ir(ast_tree: &Vec<ast::BfAst>) -> Vec<BfIR> {
 #[derive(Debug, Clone)]
 struct OptimizeIRContext {
     has_while: bool,
-    local_var: HashMap<isize, u8>,
+    local_var: HashMap<isize, u8, BuildNoHashHasher<isize>>,
 }
 
 impl Default for OptimizeIRContext {
@@ -335,7 +486,7 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                     }
                     let mut new_ctx = OptimizeIRContext {
                         local_var: local_var.clone(),
-                        has_while: ctx.has_while
+                        has_while: ctx.has_while,
                     };
                     _opt(children, &mut new_ctx);
                     *local_var = new_ctx.local_var;
@@ -348,7 +499,8 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                     if is_monolayer {
                         let mut has_other = false;
                         let mut local_ptr = 0;
-                        let mut value_changes = HashMap::new();
+                        let mut value_changes: HashMap<isize, isize, BuildNoHashHasher<isize>> =
+                            Default::default();
                         for child in children {
                             match child {
                                 BfIR::IncrementValue(ptr_offset, i) => {
@@ -495,4 +647,108 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
         }
     }
     _opt(ir, &mut OptimizeIRContext::default());
+}
+
+#[derive(Debug, Default)]
+pub struct OptimizeIROADContext {
+    pub local_var_refence_count: HashMap<isize, usize, BuildNoHashHasher<isize>>,
+    pub local_var_ir_index: HashMap<
+        isize,
+        HashMap<usize, Vec<usize>, BuildNoHashHasher<isize>>,
+        BuildNoHashHasher<isize>,
+    >,
+    pub ptr: isize,
+}
+
+/// oad 是 Operation And Dead code 的缩写
+///
+/// 这个函数是用于合并操作和清楚死代码的
+///
+/// 开发中
+pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
+    // 这里的 Result 是用来当遇到 while 循环的时候直接全部退出用的，所以不需要管他
+    fn _scan(ir: &Vec<BfIR>, ctx: &mut OptimizeIROADContext) -> Result<(), ()> {
+        let mut index = 0;
+        while index < ir.len() {
+            let child_ir = &ir[index];
+            match child_ir {
+                BfIR::SetValue(offset, _)
+                | BfIR::IncrementValue(offset, _)
+                | BfIR::DecrementValue(offset, _) => {
+                    let ptr = offset.apply_offset(ctx.ptr);
+                    let count = *ctx.local_var_refence_count.entry(ptr).or_insert(0);
+                    ctx.local_var_ir_index
+                        .entry(ptr)
+                        .or_default()
+                        .entry(count)
+                        .or_default()
+                        .push(index);
+                }
+                BfIR::Output(offset) | BfIR::Input(offset) => {
+                    let ptr = offset.apply_offset(ctx.ptr);
+                    *ctx.local_var_refence_count.entry(ptr).or_insert(0) += 1;
+                }
+                BfIR::IncrementPointer(val) => {
+                    ctx.ptr += *val;
+                }
+                BfIR::DecrementPointer(val) => {
+                    ctx.ptr -= *val;
+                }
+                BfIR::WhileLoop(..) => {
+                    return Err(());
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+        Ok(())
+    }
+
+    fn _opt(ir: &mut Vec<BfIR>, ctx: &OptimizeIROADContext) {
+        let mut removed_count = 0usize;
+        for ptr in ctx.local_var_ir_index.values() {
+            let mut init_ir = BfIR::SetValue(PtrOffset::None, 0);
+            for (_, indexs) in ptr {
+                if indexs.len() < 2 {
+                    continue;
+                }
+                let final_ir = indexs
+                    .into_iter()
+                    .try_fold(init_ir.clone(), |last_ir, index| {
+                        last_ir.merge_value(&ir[*index])
+                    })
+                    .unwrap();
+            }
+        }
+    }
+
+    let mut ctx = Default::default();
+    _ = _scan(ir, &mut ctx);
+    println!("{ctx:?}");
+}
+
+mod error {
+    use std::fmt::Formatter;
+
+    #[derive(Debug)]
+    pub enum OperationMergeError {
+        CannotMerge { one: String, other_one: String },
+        CannotMatchExpr,
+    }
+
+    impl std::fmt::Display for OperationMergeError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::CannotMerge {
+                    one: a,
+                    other_one: b,
+                } => write!(f, "Cannot merge '{a}' and '{b}'"),
+                Self::CannotMatchExpr => write!(f, "Cannot match expr"),
+            }
+        }
+    }
+
+    impl std::error::Error for OperationMergeError {}
+
+    pub type OperationMergeResult<T> = Result<T, OperationMergeError>;
 }
