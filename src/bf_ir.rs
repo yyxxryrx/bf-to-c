@@ -4,7 +4,7 @@ use nohash::BuildNoHashHasher;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PtrOffset {
     Left(isize),
     Right(isize),
@@ -129,14 +129,14 @@ impl IROp {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IRExpr {
     pub source: PtrOffset,
     pub op: Option<IROp>,
     pub value: Option<isize>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IRValue {
     Const(isize),
     Expr(IRExpr),
@@ -190,7 +190,7 @@ impl IRValue {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IRValues(isize, Vec<(IROp, IRValue)>);
 
 impl IRValues {
@@ -207,7 +207,7 @@ impl IRValues {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BfIR {
     IncrementPointer(isize),
     DecrementPointer(isize),
@@ -293,11 +293,23 @@ impl BfIR {
                     }
                 }
             }
-            (Self::DecrementValue(_, val1), Self::DecrementValue(offset,val2)) => {
+            (Self::DecrementValue(_, val1), Self::DecrementValue(offset, val2)) => {
                 let mut values = IRValues::new();
                 values.push(*val1, IROp::Sub);
                 values.push(*val2, IROp::Sub);
                 Ok(BfIR::IncrementValues(*offset, values))
+            }
+            (Self::IncrementValue(_, val1), Self::DecrementValue(offset, val2))
+            | (Self::DecrementValue(_, val2), Self::IncrementValue(offset, val1)) => {
+                match val1.merge(val2, IROp::Sub) {
+                    Ok(val) => Ok(Self::IncrementValue(*offset, val)),
+                    Err(..) => {
+                        let mut values = IRValues::new();
+                        values.push(*val1, IROp::Add);
+                        values.push(*val2, IROp::Sub);
+                        Ok(BfIR::IncrementValues(*offset, values))
+                    }
+                }
             }
             _ => Err(OperationMergeError::CannotMerge {
                 one: format!("{self:?}"),
@@ -353,8 +365,12 @@ impl BfIR {
                     _ => return Err(OperationMergeError::CannotMatchExpr),
                 },
             },
-            (Self::IncrementValue(..), Self::IncrementValue(..)) => self.merge_value(other_ir)?,
+            (Self::IncrementValue(..), Self::IncrementValue(..))
+            | (Self::IncrementValues(..), Self::DecrementValue(..))
+            | (Self::DecrementValue(..), Self::IncrementValue(..))
+            | (Self::DecrementValue(..), Self::DecrementValue(..)) => self.merge_value(other_ir)?,
             _ => {
+                todo!("还没做完呢");
                 return Err(OperationMergeError::CannotMerge {
                     one: format!("{self:?}"),
                     other_one: format!("{other_ir:?}"),
@@ -705,7 +721,7 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
     }
 
     fn _opt(ir: &mut Vec<BfIR>, ctx: &OptimizeIROADContext) {
-        let mut removed_count = 0usize;
+        let mut removed_index = Vec::<usize>::new();
         for ptr in ctx.local_var_ir_index.values() {
             let mut init_ir = BfIR::SetValue(PtrOffset::None, 0);
             for (_, indexs) in ptr {
@@ -715,16 +731,37 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
                 let final_ir = indexs
                     .into_iter()
                     .try_fold(init_ir.clone(), |last_ir, index| {
-                        last_ir.merge_value(&ir[*index])
+                        let cur_ir = &ir[*index - removed_index.iter().filter(|x| **x < *index).count()];
+                        let merged_ir = last_ir.merge_op(cur_ir);
+                        // 调试输出
+                        println!("last: {last_ir:?}");
+                        println!("cur: {cur_ir:?}");
+                        println!("merged: {merged_ir:?}");
+                        merged_ir
                     })
                     .unwrap();
+                for index in indexs.iter().take(indexs.len() - 1) {
+                    ir.remove(*index - removed_index.iter().filter(|x| **x < *index).count());
+                    removed_index.push(*index);
+                }
+                let last_index = *indexs.last().unwrap();
+                let cur_last_index = last_index - removed_index.iter().filter(|x| **x < last_index).count();
+                if final_ir == init_ir {
+                    ir.remove(cur_last_index);
+                    removed_index.push(last_index);
+                    break;
+                }
+                ir[cur_last_index] = final_ir.clone();
+                init_ir = final_ir;
             }
         }
     }
 
     let mut ctx = Default::default();
     _ = _scan(ir, &mut ctx);
+    // 调试输出
     println!("{ctx:?}");
+    _opt(ir, &ctx);
 }
 
 mod error {
