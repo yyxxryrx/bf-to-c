@@ -74,6 +74,7 @@ pub fn generate_c_code(irs: &Vec<BfIR>) -> String {
                 BfIR::SetValue(offset, value) => {
                     code += &format!("{indent}buffer[ptr{offset}] = {value};\n");
                 }
+                _ => todo!("未实现的转换：{ir:?}"),
             }
         }
         code
@@ -156,6 +157,7 @@ pub fn generate_py_code(irs: &Vec<BfIR>) -> String {
                 BfIR::Input(offset) => {
                     code += &format!("{indent}buffer[ptr{offset}] = ord(sys.stdin.read(1))\n");
                 }
+                _ => todo!("未实现的转换：{ir:?}"),
             }
         }
         code
@@ -562,11 +564,7 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                     }
                     code += &format!("start{cur_loop_index}:\n");
                     code += &_g(body, var_index, loop_index);
-                    let cmd = if *val >= 0 {
-                        "add"
-                    } else {
-                        "sub"
-                    };
+                    let cmd = if *val >= 0 { "add" } else { "sub" };
                     let val = (*val).abs();
                     let e_ptr = get_element_ptr(&PtrOffset::None, var_index, &mut code);
                     new_ir! {
@@ -579,6 +577,7 @@ pub fn generate_llvm_ir(irs: &Vec<BfIR>) -> String {
                     }
                     code += &format!("end{cur_loop_index}:\n");
                 }
+                _ => todo!("未实现的转换：{ir:?}"),
             }
         }
         code
