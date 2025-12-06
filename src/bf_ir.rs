@@ -505,7 +505,7 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                         has_while: ctx.has_while,
                     };
                     _opt(children, &mut new_ctx);
-                    *local_var = new_ctx.local_var;
+                    // *local_var = new_ctx.local_var;
                     if *value_changed == 0 {
                         *child = BfIR::DeadLoop(children.clone());
                         index += 1;
@@ -725,7 +725,7 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
         for ptr in ctx.local_var_ir_index.values() {
             let mut init_ir = BfIR::SetValue(PtrOffset::None, 0);
             for (_, indexs) in ptr {
-                if indexs.len() < 2 {
+                if indexs.len() < 1 {
                     continue;
                 }
                 let final_ir = indexs
