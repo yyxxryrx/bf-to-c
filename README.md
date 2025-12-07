@@ -81,6 +81,57 @@ echo "++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<++++++
 
 使用本工具编译后可以生成对应的目标语言代码。
 
+例如使用如下命令后应得到对应的C代码
+
+```bash
+echo "++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.---------.>+.>." | bf-to-c -c 1 -O3 -o - -
+```
+
+> 生成的C代码
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+int ptr = 15000;
+uint8_t buffer[30000];
+
+int main() {
+    buffer[ptr + 4] = 10;
+    ptr += 1;
+    buffer[ptr] = 72;
+    fputc(buffer[ptr], stdout);
+    ptr += 1;
+    buffer[ptr] = 101;
+    fputc(buffer[ptr], stdout);
+    buffer[ptr] = 108;
+    fputc(buffer[ptr], stdout);
+    fputc(buffer[ptr], stdout);
+    buffer[ptr] = 111;
+    fputc(buffer[ptr], stdout);
+    ptr += 1;
+    buffer[ptr] = 32;
+    fputc(buffer[ptr], stdout);
+    ptr -= 2;
+    buffer[ptr] = 87;
+    fputc(buffer[ptr], stdout);
+    ptr += 1;
+    fputc(buffer[ptr], stdout);
+    buffer[ptr] = 114;
+    fputc(buffer[ptr], stdout);
+    buffer[ptr] = 108;
+    fputc(buffer[ptr], stdout);
+    buffer[ptr] = 99;
+    fputc(buffer[ptr], stdout);
+    ptr += 1;
+    buffer[ptr] = 33;
+    fputc(buffer[ptr], stdout);
+    ptr += 1;
+    fputc(buffer[ptr], stdout);
+    return 0;
+}
+```
+
 ## 许可证
 
 本项目采用 MIT 许可证，详情请见 [LICENSE](LICENSE) 文件。
