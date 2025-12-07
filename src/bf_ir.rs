@@ -495,7 +495,7 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                         ir.remove(index);
                         continue;
                     }
-                    if children.is_empty() && *value_changed == -1 {
+                    if children.is_empty() && (*value_changed).abs() == 1 {
                         *child = BfIR::SetValue(0.into(), 0);
                         index += 1;
                         continue;
@@ -517,7 +517,7 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                         let mut local_ptr = 0;
                         let mut value_changes: HashMap<isize, isize, BuildNoHashHasher<isize>> =
                             Default::default();
-                        for child in children {
+                        for child in children.into_iter() {
                             match child {
                                 BfIR::IncrementValue(ptr_offset, i) => {
                                     let ptr_offset: isize = ptr_offset.into();
@@ -560,6 +560,10 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                         if let Some(init_value) = local_var.get(&ptr) {
                             if *init_value as isize % *value_changed != 0 {
                                 index += 1;
+                                continue;
+                            }
+                            if children.is_empty() {
+                                *child = BfIR::SetValue(PtrOffset::None, 0);
                                 continue;
                             }
                             let init_value = if *value_changed < 0 {
@@ -643,12 +647,6 @@ pub fn optimize_ir(ir: &mut Vec<BfIR>) {
                     local_var.insert(ptr + ptr_offset, *value as u8);
                 }
                 BfIR::WhileLoop(..) => {
-                    if let Some(&init_value) = local_var.get(&ptr) {
-                        if init_value == 0 {
-                            ir.remove(index);
-                            continue;
-                        }
-                    }
                     has_while = true;
                     ptr = 0;
                     local_var.clear();
@@ -688,9 +686,7 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
         while index < ir.len() {
             let child_ir = &ir[index];
             match child_ir {
-                BfIR::SetValue(offset, _)
-                | BfIR::IncrementValue(offset, _)
-                | BfIR::DecrementValue(offset, _) => {
+                BfIR::SetValue(offset, _) => {
                     let ptr = offset.apply_offset(ctx.ptr);
                     let count = *ctx.local_var_refence_count.entry(ptr).or_insert(0);
                     ctx.local_var_ir_index
@@ -699,6 +695,20 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
                         .entry(count)
                         .or_default()
                         .push(index);
+                }
+                BfIR::IncrementValue(offset, val) | BfIR::DecrementValue(offset, val) => {
+                    let ptr = offset.apply_offset(ctx.ptr);
+                    let count = *ctx.local_var_refence_count.entry(ptr).or_insert(0);
+                    ctx.local_var_ir_index
+                        .entry(ptr)
+                        .or_default()
+                        .entry(count)
+                        .or_default()
+                        .push(index);
+                    if let IRValue::Expr(expr) = val {
+                        let ptr = expr.source.apply_offset(ctx.ptr);
+                        *ctx.local_var_refence_count.entry(ptr).or_insert(0) += 1;
+                    }
                 }
                 BfIR::Output(offset) | BfIR::Input(offset) => {
                     let ptr = offset.apply_offset(ctx.ptr);
@@ -711,6 +721,9 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
                     ctx.ptr -= *val;
                 }
                 BfIR::WhileLoop(..) => {
+                    for i in ctx.local_var_refence_count.values_mut() {
+                        *i += 1;
+                    }
                     return Err(());
                 }
                 _ => {}
@@ -722,16 +735,18 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
 
     fn _opt(ir: &mut Vec<BfIR>, ctx: &OptimizeIROADContext) {
         let mut removed_index = Vec::<usize>::new();
-        for ptr in ctx.local_var_ir_index.values() {
+        let mut ignore_ops: HashMap<isize, usize> = HashMap::new();
+        for (ptr, entry) in ctx.local_var_ir_index.iter() {
             let mut init_ir = BfIR::SetValue(PtrOffset::None, 0);
-            for (_, indexs) in ptr {
+            for (count, indexs) in entry {
                 if indexs.len() < 1 {
                     continue;
                 }
                 let final_ir = indexs
                     .into_iter()
                     .try_fold(init_ir.clone(), |last_ir, index| {
-                        let cur_ir = &ir[*index - removed_index.iter().filter(|x| **x < *index).count()];
+                        let cur_ir =
+                            &ir[*index - removed_index.iter().filter(|x| **x < *index).count()];
                         let merged_ir = last_ir.merge_op(cur_ir);
                         // 调试输出
                         println!("last: {last_ir:?}");
@@ -745,15 +760,37 @@ pub fn optimize_ir_oad(ir: &mut Vec<BfIR>) {
                     removed_index.push(*index);
                 }
                 let last_index = *indexs.last().unwrap();
-                let cur_last_index = last_index - removed_index.iter().filter(|x| **x < last_index).count();
+                let cur_last_index =
+                    last_index - removed_index.iter().filter(|x| **x < last_index).count();
                 if final_ir == init_ir {
                     ir.remove(cur_last_index);
                     removed_index.push(last_index);
+                    ignore_ops.entry(*ptr).insert_entry(*count);
                     break;
                 }
                 ir[cur_last_index] = final_ir.clone();
                 init_ir = final_ir;
             }
+        }
+        // 消除死代码
+        for (ptr, count) in ctx.local_var_refence_count.iter() {
+            let Some(indexs) = ctx.local_var_ir_index[ptr].get(count) else {
+                continue;
+            };
+            let Some(index) = indexs.last() else {
+                continue;
+            };
+            if ignore_ops
+                .get(ptr)
+                .map(|v| *v == *count)
+                .unwrap_or_default()
+            {
+                continue;
+            }
+            let offset = removed_index.iter().filter(|x| *x < index).count();
+            println!("{ignore_ops:?} {:?}, {} {ptr}", ir, *index - offset);
+            ir.remove(*index - offset);
+            removed_index.push(*index);
         }
     }
 
